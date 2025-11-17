@@ -1,0 +1,106 @@
+name: IT_GLT_DevOps/Dev/octodns-dev-yamllint
+on:
+  push:
+    branches:
+    - "*"
+env:
+  AWS_ACCESS_KEY_ID: AKIA6ODU3XVQBBAR6K5H
+  AXFR_KEY_NAME: galldeglttst16
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4.1.0
+    - uses: actions/checkout@v4.1.0
+    - name: Activate virtual environment & install dependencies
+      run: |-
+        python -m venv env
+        source env/bin/activate
+        python -m pip install -r requirements.txt
+    - name: Validate OctoDNS configuration (No output is successful)
+      continue-on-error: true
+      env:
+        AXFR_KEY_NAME: "${{ env.AXFR_KEY_NAME }}"
+        AXFR_KEY_SECRET: "${{ secrets.AXFR_KEY_SECRET }}"
+      run: |-
+        source env/bin/activate
+        set +e  # Don't exit on error automatically
+        output=$(octodns-validate --config-file=config/config_bind_ivanlab.yaml 2>&1)
+        exit_code=$?
+        if [ $exit_code -ne 0 ]; then
+          # Extract just the ValidationError lines, removing stack traces
+          clean_errors=$(echo "$output" | grep -A 10 "octodns.record.exception.ValidationError:" | \
+            grep -v "Traceback\|File \"/\|sys.exit\|main()\|validate_configs\|populate\|Record.new\|raise ValidationError" | \
+            grep -v "^\s*$" | head -10)
+          if [[ -n "$clean_errors" ]]; then
+            echo "##vso[task.logissue type=error]$clean_errors"
+            echo "Validation Errors:"
+            echo "$clean_errors"
+            echo "$output"
+          else
+            echo "##vso[task.logissue type=error]$output"
+            echo "$output"
+          fi
+          exit 1
+        fi
+    - name: Validate OctoDNS configuration (No output is successful)
+      continue-on-error: true
+      env:
+        AWS_ACCESS_KEY_ID: "${{ env.AWS_ACCESS_KEY_ID }}"
+        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+      run: |-
+        source env/bin/activate
+        set +e  # Don't exit on error automatically
+        output=$(octodns-validate --config-file=config/config_route53.yaml 2>&1)
+        exit_code=$?
+        if [ $exit_code -ne 0 ]; then
+          # Extract just the ValidationError lines, removing stack traces
+          clean_errors=$(echo "$output" | grep -A 10 "octodns.record.exception.ValidationError:" | \
+            grep -v "Traceback\|File \"/\|sys.exit\|main()\|validate_configs\|populate\|Record.new\|raise ValidationError" | \
+            grep -v "^\s*$" | head -10)
+          if [[ -n "$clean_errors" ]]; then
+            echo "##vso[task.logissue type=error]$clean_errors"
+            echo "Validation Errors:"
+            echo "$clean_errors"
+            echo "$output"
+          else
+            echo "##vso[task.logissue type=error]$output"
+            echo "$output"
+          fi
+          exit 1
+        fi
+    - name: Run octodns-sync (dry run) - BIND
+      continue-on-error: true
+      env:
+        AXFR_KEY_NAME: "${{ env.AXFR_KEY_NAME }}"
+        AXFR_KEY_SECRET: "${{ secrets.AXFR_KEY_SECRET }}"
+      run: source env/bin/activate && octodns-sync --config-file=config/config_bind_ivanlab.yaml
+    - name: Run octodns-sync (dry run) - Route53
+      continue-on-error: true
+      env:
+        AWS_ACCESS_KEY_ID: "${{ env.AWS_ACCESS_KEY_ID }}"
+        AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+      run: source env/bin/activate && octodns-sync --config-file=config/config_route53.yaml
+    - name: Lint all YAML files (No output is successful)
+      continue-on-error: true
+      run: |-
+        set +e  # Don't exit on error automatically
+        output=$(find ${{ github.workspace }} -type f \( -iname '*.yaml' -o -iname '*.yml' \) -exec env/bin/yamllint {} +)
+        exit_code=$?
+        if [ $exit_code -ne 0 ]; then
+          # Clean up ANSI color codes and formatting
+          clean_output=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g')
+          # Count errors and warnings
+          error_count=$(echo "$clean_output" | grep -c "error")
+          warning_count=$(echo "$clean_output" | grep -c "warning")
+          file_count=$(echo "$clean_output" | grep -E "^/" | wc -l)
+          # Create summary
+          summary="YAMLLint: $file_count files checked, $error_count errors, $warning_count warnings"
+          echo "##vso[task.logissue type=error]$summary"
+          echo "$summary"
+          echo ""
+          echo "Details:"
+          echo "$clean_output"
+          exit 1
+        fi
